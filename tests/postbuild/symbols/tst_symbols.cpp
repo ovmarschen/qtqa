@@ -1,31 +1,26 @@
 /****************************************************************************
 **
-** Copyright (C) 2015 The Qt Company Ltd.
-** Contact: http://www.qt.io/licensing/
+** Copyright (C) 2017 The Qt Company Ltd.
+** Contact: https://www.qt.io/licensing/
 **
 ** This file is part of the test suite of the Qt Toolkit.
 **
-** $QT_BEGIN_LICENSE:LGPL21$
+** $QT_BEGIN_LICENSE:GPL-EXCEPT$
 ** Commercial License Usage
 ** Licensees holding valid commercial Qt licenses may use this file in
 ** accordance with the commercial license agreement provided with the
 ** Software or, alternatively, in accordance with the terms contained in
 ** a written agreement between you and The Qt Company. For licensing terms
-** and conditions see http://www.qt.io/terms-conditions. For further
-** information use the contact form at http://www.qt.io/contact-us.
+** and conditions see https://www.qt.io/terms-conditions. For further
+** information use the contact form at https://www.qt.io/contact-us.
 **
-** GNU Lesser General Public License Usage
-** Alternatively, this file may be used under the terms of the GNU Lesser
-** General Public License version 2.1 or version 3 as published by the Free
-** Software Foundation and appearing in the file LICENSE.LGPLv21 and
-** LICENSE.LGPLv3 included in the packaging of this file. Please review the
-** following information to ensure the GNU Lesser General Public License
-** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
-**
-** As a special exception, The Qt Company gives you certain additional
-** rights. These rights are described in The Qt Company LGPL Exception
-** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+** GNU General Public License Usage
+** Alternatively, this file may be used under the terms of the GNU
+** General Public License version 3 as published by the Free Software
+** Foundation with exceptions as appearing in the file LICENSE.GPL3-EXCEPT
+** included in the packaging of this file. Please review the following
+** information to ensure the GNU General Public License requirements will
+** be met: https://www.gnu.org/licenses/gpl-3.0.html.
 **
 ** $QT_END_LICENSE$
 **
@@ -80,11 +75,17 @@ void tst_Symbols::initTestCase()
         );
     }
 
-    modules = qt_tests_shared_global_get_modules(configFile);
+    QString workDir = qtModuleDir + QStringLiteral("/tests/global");
+    modules = qt_tests_shared_global_get_modules(workDir, configFile);
 
-    QVERIFY2(modules.size() > 0, "Something is wrong in the global config file.");
+    if (!modules.size())
+        QSKIP("No modules found.");
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    qtLibDir = QLibraryInfo::path( QLibraryInfo::LibrariesPath );
+#else
     qtLibDir = QLibraryInfo::location( QLibraryInfo::LibrariesPath );
+#endif
     QFileInfo qtLibDirInfo(qtLibDir);
     QVERIFY2(qtLibDirInfo.isDir(), qPrintable(
         QString("QLibraryInfo::LibrariesPath `%1' %2\nIs your build complete and installed?")
@@ -103,16 +104,17 @@ void tst_Symbols::initTestCase()
 static QString symbolToLine(const QString &symbol, const QString &lib)
 {
     // nm outputs the symbol name, the type, the address and the size
-    QRegExp re("global constructors keyed to ([a-zA-Z_0-9.]*) (.) ([0-f]*) ([0-f]*)");
-    if (re.indexIn(symbol) == -1)
+    QRegularExpression re("global constructors keyed to ([a-zA-Z_0-9.]*) (.) ([0-f]*) ([0-f]*)");
+    QRegularExpressionMatch match = re.match(symbol);
+    if (!match.hasMatch())
         return QString();
 
     // address and symbolSize are in hex. Convert to integers
     bool ok;
-    int symbolAddress = re.cap(3).toInt(&ok, 16);
+    int symbolAddress = match.captured(3).toInt(&ok, 16);
     if (!ok)
         return QString();
-    int symbolSize = re.cap(4).toInt(&ok, 16);
+    int symbolSize = match.captured(4).toInt(&ok, 16);
     if (!ok)
         return QString();
 
@@ -180,14 +182,15 @@ void tst_Symbols::globalObjects()
             if (!symbol.startsWith("global constructors keyed to "))
                 continue;
 
-            QRegExp re("global constructors keyed to ([a-zA-Z_0-9.]*)");
-            QVERIFY(re.indexIn(symbol) != -1);
+            QRegularExpression re("global constructors keyed to ([a-zA-Z_0-9.]*)");
+            QRegularExpressionMatch match = re.match(symbol);
+            QVERIFY(match.hasMatch());
 
-            QString cap = re.cap(1);
+            QString cap = match.captured(1);
 
             bool whitelisted = false;
             foreach (QString white, whitelist) {
-                if (cap.indexOf(QRegExp(white)) != -1) {
+                if (cap.indexOf(QRegularExpression(white)) != -1) {
                     whitelisted = true;
                     break;
                 }

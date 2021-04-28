@@ -1,31 +1,26 @@
 /****************************************************************************
 **
-** Copyright (C) 2015 The Qt Company Ltd.
-** Contact: http://www.qt.io/licensing/
+** Copyright (C) 2017 The Qt Company Ltd.
+** Contact: https://www.qt.io/licensing/
 **
 ** This file is part of the test suite of the Qt Toolkit.
 **
-** $QT_BEGIN_LICENSE:LGPL21$
+** $QT_BEGIN_LICENSE:GPL-EXCEPT$
 ** Commercial License Usage
 ** Licensees holding valid commercial Qt licenses may use this file in
 ** accordance with the commercial license agreement provided with the
 ** Software or, alternatively, in accordance with the terms contained in
 ** a written agreement between you and The Qt Company. For licensing terms
-** and conditions see http://www.qt.io/terms-conditions. For further
-** information use the contact form at http://www.qt.io/contact-us.
+** and conditions see https://www.qt.io/terms-conditions. For further
+** information use the contact form at https://www.qt.io/contact-us.
 **
-** GNU Lesser General Public License Usage
-** Alternatively, this file may be used under the terms of the GNU Lesser
-** General Public License version 2.1 or version 3 as published by the Free
-** Software Foundation and appearing in the file LICENSE.LGPLv21 and
-** LICENSE.LGPLv3 included in the packaging of this file. Please review the
-** following information to ensure the GNU Lesser General Public License
-** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
-**
-** As a special exception, The Qt Company gives you certain additional
-** rights. These rights are described in The Qt Company LGPL Exception
-** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+** GNU General Public License Usage
+** Alternatively, this file may be used under the terms of the GNU
+** General Public License version 3 as published by the Free Software
+** Foundation with exceptions as appearing in the file LICENSE.GPL3-EXCEPT
+** included in the packaging of this file. Please review the following
+** information to ensure the GNU General Public License requirements will
+** be met: https://www.gnu.org/licenses/gpl-3.0.html.
 **
 ** $QT_END_LICENSE$
 **
@@ -39,10 +34,17 @@
 #include <QtTest/QtTest>
 
 QStringList qt_tests_shared_global_get_include_path(const QString &makeFile);
-QHash<QString, QString> qt_tests_shared_global_get_modules(const QString &configFile);
+QHash<QString, QString> qt_tests_shared_global_get_modules(const QString &workDir,
+                                                           const QString &configFile);
 QStringList qt_tests_shared_global_get_include_paths();
 
-QHash<QString, QString> qt_tests_shared_global_get_modules(const QString &configFile)
+QStringList qt_tests_shared_run_qmake(const QString &workDir,
+                                      const QByteArray &proFileConent,
+                                      QStringList(*makeFileParser)(const QString&));
+QStringList qt_tests_shared_global_get_export_modules(const QString &makeFile);
+void qt_tests_shared_filter_module_list(const QString &workDir, QHash<QString, QString> &modules);
+
+QHash<QString, QString> qt_tests_shared_global_get_modules(const QString &workDir, const QString &configFile)
 {
     QHash<QString, QString> modules;
 
@@ -57,14 +59,14 @@ QHash<QString, QString> qt_tests_shared_global_get_modules(const QString &config
 
     while (!xml.atEnd()) {
         xml.readNext();
-        if (xml.tokenType() == QXmlStreamReader::StartElement && xml.name() == "config") {
+        if (xml.tokenType() == QXmlStreamReader::StartElement && xml.name() == QLatin1String("config")) {
             xml.readNextStartElement();
-            if (xml.name() == "modules") {
+            if (xml.name() == QLatin1String("modules")) {
                 while (!xml.atEnd()) {
                     xml.readNextStartElement();
                     QString modName;
                     QString qtModName;
-                    if (xml.name() == "module") {
+                    if (xml.name() == QLatin1String("module")) {
                         modName = xml.attributes().value("name").toString().simplified();
                         qtModName = xml.attributes().value("qtname").toString().simplified();
                         if (!modName.isEmpty() && !qtModName.isEmpty())
@@ -77,34 +79,72 @@ QHash<QString, QString> qt_tests_shared_global_get_modules(const QString &config
 
     file.close();
 
+    qt_tests_shared_filter_module_list(workDir, modules);
+
     qDebug() << "modules keys:" << modules.keys();
     qDebug() << "modules values:" << modules.values();
 
     return modules;
 }
 
-QStringList qt_tests_shared_global_get_include_paths(const QString &workDir, QHash<QString, QString> &modules)
+QByteArray qt_tests_shared_global_get_modules_pro_lines(const QHash<QString, QString> &modules)
+{
+    QByteArray result;
+    foreach (QString moduleName, modules.values()) {
+        QByteArray module = moduleName.toLatin1();
+        result += "qtHaveModule(" + module + ") {\n" +
+                  "    QT += " + module + "\n" +
+                  "    MODULES += " + module + "\n" +
+                  "}\n";
+    }
+    result += "QMAKE_EXTRA_VARIABLES += MODULES\n";
+    return result;
+}
+
+QStringList qt_tests_shared_global_get_include_paths(const QString &workDir,
+                                                     QHash<QString, QString> &modules)
+{
+    return qt_tests_shared_run_qmake(workDir,
+                                     qt_tests_shared_global_get_modules_pro_lines(modules),
+                                     &qt_tests_shared_global_get_include_path);
+}
+
+void qt_tests_shared_filter_module_list(const QString &workDir, QHash<QString, QString> &modules)
+{
+    const QStringList result = qt_tests_shared_run_qmake(workDir,
+                                                         qt_tests_shared_global_get_modules_pro_lines(modules),
+                                                         &qt_tests_shared_global_get_export_modules);
+    const QStringList keys = modules.keys();
+    for (int i = 0; i < keys.size(); ++i) {
+        const QString key = keys.at(i);
+        if (!result.contains(modules[key]))
+            modules.remove(key);
+    }
+}
+
+QStringList qt_tests_shared_run_qmake(const QString &workDir,
+                                      const QByteArray &proFileContent,
+                                      QStringList(*makeFileParser)(const QString&))
 {
     QString proFile = workDir + "/global.pro";
     QString makeFile = workDir + "/Makefile";
 
-    QStringList incPaths;
+    QStringList result;
 
 #ifndef QT_NO_PROCESS
     QFile file(proFile);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QWARN("Can't open the pro file for global.");
-        return incPaths;
+        return result;
     }
 
-    QByteArray proLine = "QT += " + QStringList(modules.values()).join(" ").toLatin1() + "\n";
-    file.write(proLine);
+    file.write(proFileContent);
     file.flush();
     file.close();
 
     if (!QDir::setCurrent(workDir)) {
         QWARN("Change working dir failed.");
-        return incPaths;
+        return result;
     }
 
     QString qmakeApp = "qmake";
@@ -117,20 +157,20 @@ QStringList qt_tests_shared_global_get_include_paths(const QString &workDir, QHa
     proc.start(qmakeApp, qmakeArgs, QIODevice::ReadOnly);
     if (!proc.waitForFinished(6000000)) {
         qWarning() << qmakeApp << qmakeArgs << "in" << workDir << "didn't finish" << proc.errorString();
-        return incPaths;
+        return result;
     }
     if (proc.exitCode() != 0) {
         qWarning() << qmakeApp << qmakeArgs << "in" << workDir << "returned with" << proc.exitCode();
         qDebug() << proc.readAllStandardError();
-        return incPaths;
+        return result;
     }
 
     QFile::remove(proFile);
 
-    incPaths = qt_tests_shared_global_get_include_path(makeFile);
+    result = makeFileParser(makeFile);
 #ifdef Q_OS_WIN
-    if (incPaths.isEmpty())
-        incPaths = qt_tests_shared_global_get_include_path(makeFile + QLatin1String(".Release"));
+    if (result.isEmpty())
+        result = makeFileParser(makeFile + QLatin1String(".Release"));
 #endif
 
     QFile::remove(makeFile);
@@ -138,7 +178,7 @@ QStringList qt_tests_shared_global_get_include_paths(const QString &workDir, QHa
     Q_UNUSED(modules);
 #endif // QT_NO_PROCESS
 
-    return incPaths;
+    return result;
 }
 
 QStringList qt_tests_shared_global_get_include_path(const QString &makeFile)
@@ -168,6 +208,27 @@ QStringList qt_tests_shared_global_get_include_path(const QString &makeFile)
         }
     }
 
+    return QStringList();
+}
+
+QStringList qt_tests_shared_global_get_export_modules(const QString &makeFile)
+{
+    QFile file(makeFile);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return QStringList();
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        QString line = in.readLine();
+        int index = line.indexOf('=');
+        if (index > 13 && line.startsWith(QLatin1String("EXPORT_MODULES"))) {
+            QString relatives = line.mid(index + 1);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+            return relatives.split(QChar(' '), Qt::SkipEmptyParts);
+#else
+            return relatives.split(QChar(' '), QString::SkipEmptyParts);
+#endif
+        }
+    }
     return QStringList();
 }
 

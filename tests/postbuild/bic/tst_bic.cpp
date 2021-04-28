@@ -1,31 +1,26 @@
 /****************************************************************************
 **
-** Copyright (C) 2015 The Qt Company Ltd.
-** Contact: http://www.qt.io/licensing/
+** Copyright (C) 2020 The Qt Company Ltd.
+** Contact: https://www.qt.io/licensing/
 **
 ** This file is part of the test suite of the Qt Toolkit.
 **
-** $QT_BEGIN_LICENSE:LGPL21$
+** $QT_BEGIN_LICENSE:GPL-EXCEPT$
 ** Commercial License Usage
 ** Licensees holding valid commercial Qt licenses may use this file in
 ** accordance with the commercial license agreement provided with the
 ** Software or, alternatively, in accordance with the terms contained in
 ** a written agreement between you and The Qt Company. For licensing terms
-** and conditions see http://www.qt.io/terms-conditions. For further
-** information use the contact form at http://www.qt.io/contact-us.
+** and conditions see https://www.qt.io/terms-conditions. For further
+** information use the contact form at https://www.qt.io/contact-us.
 **
-** GNU Lesser General Public License Usage
-** Alternatively, this file may be used under the terms of the GNU Lesser
-** General Public License version 2.1 or version 3 as published by the Free
-** Software Foundation and appearing in the file LICENSE.LGPLv21 and
-** LICENSE.LGPLv3 included in the packaging of this file. Please review the
-** following information to ensure the GNU Lesser General Public License
-** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
-**
-** As a special exception, The Qt Company gives you certain additional
-** rights. These rights are described in The Qt Company LGPL Exception
-** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+** GNU General Public License Usage
+** Alternatively, this file may be used under the terms of the GNU
+** General Public License version 3 as published by the Free Software
+** Foundation with exceptions as appearing in the file LICENSE.GPL3-EXCEPT
+** included in the packaging of this file. Please review the following
+** information to ensure the GNU General Public License requirements will
+** be met: https://www.gnu.org/licenses/gpl-3.0.html.
 **
 ** $QT_END_LICENSE$
 **
@@ -76,15 +71,17 @@ bool compilerVersion(const QString &compiler, QString *output, Version *version,
     *output = QString::fromLocal8Bit(proc.readAllStandardOutput());
 
     // Extract version from last token of first line ("g++ (Ubuntu 4.8.2-19ubuntu1) 4.8.2 [build (prerelease)]\n...")
-    QRegExp versionPattern(QLatin1String("^[^(]+\\([^)]+\\) (\\d+)\\.(\\d+)\\.\\d+.*$"));
+    QRegularExpression versionPattern(QLatin1String("^[^(]+\\([^)]+\\) (\\d+)\\.(\\d+)\\.\\d+.*$"),
+                                      QRegularExpression::MultilineOption);
     Q_ASSERT(versionPattern.isValid());
-    if (!versionPattern.exactMatch(*output)) {
+    QRegularExpressionMatch match = versionPattern.match(*output);
+    if (!match.hasMatch()) {
         *errorMessage = compiler + QLatin1String(" produced unexpected output: \"")
-            + *output + QLatin1String("\", matching up to ") + QString::number(versionPattern.matchedLength());
+            + *output + QLatin1String("\", matching up to ") + QString::number(match.capturedLength());
         return false;
     }
-    version->first = versionPattern.cap(1).toInt();
-    version->second = versionPattern.cap(2).toInt();
+    version->first = match.captured(1).toInt();
+    version->second = match.captured(2).toInt();
     return true;
 #else // !QT_NO_PROCESS
     Q_UNUSED(compiler)
@@ -110,7 +107,12 @@ static QStringList compilerArguments(const QString &compiler, const QStringList 
 #if !defined(Q_OS_AIX) && !defined(Q_OS_WIN)
          << "-o" << "/dev/null"
 #endif
+#if __GNUC__ >= 8
+         << "-fdump-lang-class"
+#else
          << "-fdump-class-hierarchy"
+#endif
+         << "-std=c++17"
          << "-fPIC"; // As of 5.4, "reduce relocations" requires "-fPIC"
     return result;
 }
@@ -229,6 +231,9 @@ tst_Bic::tst_Bic(const char *appFilePath)
     bic.addBlacklistedClass(QLatin1String("QFileEngineHandler"));
     bic.addBlacklistedClass(QLatin1String("QFlags<QFileEngine::FileFlag>"));
 
+    /* QTest::toString lambda error is false positive */
+    bic.addBlacklistedClass(QRegularExpression::escape(QLatin1String("QTest::toString(const T&) [with T = QUrl]::__lambda0")));
+
     /* Private classes */
     bic.addBlacklistedClass(QLatin1String("QBrushData"));
     bic.addBlacklistedClass(QLatin1String("QObjectData"));
@@ -240,8 +245,12 @@ tst_Bic::tst_Bic(const char *appFilePath)
     bic.addBlacklistedClass(QLatin1String("QS60Style"));
     bic.addBlacklistedClass(QLatin1String("QPointerBase"));
     bic.addBlacklistedClass(QLatin1String("QOpenGLFunctionsPrivate"));
+    bic.addBlacklistedClass(QLatin1String("QOpenGLExtraFunctionsPrivate::Functions"));
+    bic.addBlacklistedClass(QLatin1String("QOpenGLExtraFunctionsPrivate"));
     bic.addBlacklistedClass(QLatin1String("QGLFunctionsPrivate"));
     bic.addBlacklistedClass(QLatin1String("QDebug::Stream"));
+    bic.addBlacklistedClass(QLatin1String("QtPrivate::StreamStateSaver"));
+    bic.addBlacklistedClass(QLatin1String("QtPrivate::big_"));
 
     /* Jambi-related classes in Designer */
     bic.addBlacklistedClass(QLatin1String("QDesignerLanguageExtension"));
@@ -306,11 +315,16 @@ tst_Bic::tst_Bic(const char *appFilePath)
     /* This structure is semi-private and should never shrink */
     bic.addBlacklistedClass(QLatin1String("QVFbHeader"));
 
-    /* This structure has a version field that allows extension */
+    /* Those structures have a version field that allows extension */
     bic.addBlacklistedClass(QLatin1String("QDeclarativePrivate::RegisterType"));
+    bic.addBlacklistedClass(QLatin1String("QQmlPrivate::RegisterType"));
+    bic.addBlacklistedClass(QLatin1String("QQmlPrivate::RegisterSingletonType"));
+    bic.addBlacklistedClass(QLatin1String("QQmlPrivate::RegisterInterface"));
 
     /* according to Thiago this is a false positive */
     bic.addBlacklistedClass(QLatin1String("QLoggingCategory::AtomicBools"));
+    bic.addBlacklistedClass(QLatin1String("QOperatingSystemVersion::HighSierra"));
+
 
     /* according to Sean Harmer these are a false positive (qtbase/ea80316f) */
     bic.addBlacklistedClass(QLatin1String("QOpenGLFunctions_1_1_DeprecatedBackend"));
@@ -336,8 +350,8 @@ void tst_Bic::initTestCase()
 
     qtModuleDir = QDir::cleanPath(QFile::decodeName(qgetenv(moduleVar)));
     if (qtModuleDir.isEmpty()) {
-        QSKIP("$QT_MODULE_TO_TEST is unset - nothing to test.  Set QT_MODULE_TO_TEST to the path "
-              "of a Qt module to test.");
+        QSKIP("$QT_MODULE_TO_TEST is unset - nothing to test.  "
+              "Set QT_MODULE_TO_TEST to the absolute path of a Qt module to test.");
     }
     if (m_compiler != QLatin1String("g++")) {
         const QString message = QLatin1String("Support for \"")
@@ -358,21 +372,16 @@ void tst_Bic::initTestCase()
         );
     }
 
-    modules = qt_tests_shared_global_get_modules(configFile);
+    QString workDir = qtModuleDir + QStringLiteral("/tests/global");
+    modules = qt_tests_shared_global_get_modules(workDir, configFile);
 
-    QVERIFY2(modules.size() > 0, "Something is wrong in the global config file.");
+    if (!modules.size())
+        QSKIP("No modules found.");
 
-    QString workDir = qtModuleDir + "/tests/global";
     incPaths = qt_tests_shared_global_get_include_paths(workDir, modules);
 
     QVERIFY2(incPaths.size() > 0, "Parse INCPATH failed.");
     m_compilerArguments = compilerArguments(m_compiler, incPaths);
-
-    QTest::addColumn<QString>("libName");
-
-    QStringList keys = modules.keys();
-    for (int i = 0; i < keys.size(); ++i)
-        QTest::newRow(keys.at(i).toLatin1()) << keys.at(i);
 
     // Run compiler to obtain version information.
     QString output;
@@ -419,18 +428,47 @@ void tst_Bic::sizesAndVTables_data()
     if (m_fileSuffix == QLatin1String(noneSuchFileSuffix))
         QSKIP("No reference files found for this platform");
 
+    QTest::addColumn<QString>("libName");
     QTest::addColumn<QString>("oldLib");
     QTest::addColumn<bool>("isPatchRelease");
 
-    int minor = (QT_VERSION >> 8) & 0xFF;
-    int patch = QT_VERSION & 0xFF;
-    for (int i = 0; i <= minor; ++i) {
-        if (i != minor || patch)
-            QTest::newRow("5." + QByteArray::number(i))
-                << (QString(qtModuleDir + "/tests/auto/bic/data/%1.5.")
-                    + QString::number(i)
-                    + QLatin1String(".0.") + m_fileSuffix + QLatin1String(".txt"))
-                << (i == minor && patch);
+    const QStringList keys = modules.keys();
+    int major = QT_VERSION_MAJOR;
+    int minor = QT_VERSION_MINOR;
+    int patch = QT_VERSION_PATCH;
+
+    QFile qmakeConf(qtModuleDir + "/.qmake.conf");
+    if (qmakeConf.open(QIODevice::ReadOnly)) {
+        const QString contents = QString::fromUtf8(qmakeConf.readAll());
+        qmakeConf.close();
+        QRegularExpression versionRegExp("MODULE_VERSION\\s*=\\s*(\\d+)\\.(\\d+)\\.(\\d+)");
+        QRegularExpressionMatch match = versionRegExp.match(contents);
+        if (match.hasMatch()) {
+            major = match.captured(1).toInt();
+            minor = match.captured(2).toInt();
+            patch = match.captured(3).toInt();
+            qDebug() << "Detected module version major:" << major << "minor:" << minor << "patch:" << patch;
+        }
+    }
+
+    if (minor == 0) {
+        QSKIP("This is the first minor release in the major series, there is no binary compatibility reference data by definition.");
+    }
+
+    for (int i = 0, end = keys.size(); i < end; i++) {
+        QString key = keys.at(i);
+        for (int i = 0; i <= minor; ++i) {
+            if (i != minor || patch) {
+                QTest::newRow(key.toLatin1() + ":5." + QByteArray::number(i))
+                    << key
+                    << (QString(qtModuleDir + "/tests/auto/bic/data/%1.")
+                        + QString::number(major)
+                        + QLatin1Char('.')
+                        + QString::number(i)
+                        + QLatin1String(".0.") + m_fileSuffix + QLatin1String(".txt"))
+                    << (i == minor && patch);
+            }
+        }
     }
 }
 
@@ -506,8 +544,7 @@ void tst_Bic::sizesAndVTables()
 #elif defined(QT_NO_PROCESS)
     QSKIP("This Qt build does not have QProcess support");
 #else
-
-    QFETCH_GLOBAL(QString, libName);
+    QFETCH(QString, libName);
     QFETCH(QString, oldLib);
     QFETCH(bool, isPatchRelease);
 

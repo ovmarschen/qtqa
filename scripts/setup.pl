@@ -1,32 +1,27 @@
 #!/usr/bin/env perl
 #############################################################################
 ##
-## Copyright (C) 2015 The Qt Company Ltd.
-## Contact: http://www.qt.io/licensing/
+## Copyright (C) 2019 The Qt Company Ltd.
+## Contact: https://www.qt.io/licensing/
 ##
 ## This file is part of the Quality Assurance module of the Qt Toolkit.
 ##
-## $QT_BEGIN_LICENSE:LGPL21$
+## $QT_BEGIN_LICENSE:GPL-EXCEPT$
 ## Commercial License Usage
 ## Licensees holding valid commercial Qt licenses may use this file in
 ## accordance with the commercial license agreement provided with the
 ## Software or, alternatively, in accordance with the terms contained in
 ## a written agreement between you and The Qt Company. For licensing terms
-## and conditions see http://www.qt.io/terms-conditions. For further
-## information use the contact form at http://www.qt.io/contact-us.
+## and conditions see https://www.qt.io/terms-conditions. For further
+## information use the contact form at https://www.qt.io/contact-us.
 ##
-## GNU Lesser General Public License Usage
-## Alternatively, this file may be used under the terms of the GNU Lesser
-## General Public License version 2.1 or version 3 as published by the Free
-## Software Foundation and appearing in the file LICENSE.LGPLv21 and
-## LICENSE.LGPLv3 included in the packaging of this file. Please review the
-## following information to ensure the GNU Lesser General Public License
-## requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-## http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
-##
-## As a special exception, The Qt Company gives you certain additional
-## rights. These rights are described in The Qt Company LGPL Exception
-## version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+## GNU General Public License Usage
+## Alternatively, this file may be used under the terms of the GNU
+## General Public License version 3 as published by the Free Software
+## Foundation with exceptions as appearing in the file LICENSE.GPL3-EXCEPT
+## included in the packaging of this file. Please review the following
+## information to ensure the GNU General Public License requirements will
+## be met: https://www.gnu.org/licenses/gpl-3.0.html.
 ##
 ## $QT_END_LICENSE$
 ##
@@ -107,12 +102,11 @@ use LWP::UserAgent        qw(                     );
 use Pod::Usage            qw( pod2usage           );
 
 # URL from which cpanminus can be downloaded.
-# Note that http://cpanmin.us, as recommended by the docs, is not a good idea;
-# it redirects to an https:// site and this requires more modules to be
-# installed to handle the SSL.
-my $HTTP_CPANMINUS =
-    'http://cpansearch.perl.org/src/MIYAGAWA/App-cpanminus-1.4005/bin/cpanm';
+# Note that https://cpanmin.us, as recommended by the docs, is not the best option
+# as it is always the newest version.
 
+my $HTTPS_CPANMINUS =
+    'https://fastapi.metacpan.org/source/MIYAGAWA/App-cpanminus-1.7044/lib/App/cpanminus/fatscript.pm';
 my $WINDOWS = ($OSNAME =~ m{win32}i);
 
 #====================== perl stuff ============================================
@@ -154,6 +148,7 @@ sub all_required_cpan_modules
         AnyEvent
         AnyEvent::HTTP
         AnyEvent::Util
+        App::cpanminus
         Capture::Tiny
         Class::Data::Inheritable
         Class::Factory::Util
@@ -180,6 +175,7 @@ sub all_required_cpan_modules
         Lingua::EN::Numbers
         List::Compare
         List::MoreUtils
+        local::lib
         Params::Validate
         Perl::Critic
         QMake::Project
@@ -236,11 +232,6 @@ sub all_required_cpan_modules
 
     # Avoid https://rt.cpan.org/Public/Bug/Display.html?id=53064
     $out{ 'File::chdir' } = '0.1005';
-
-    # Some modules cannot be installed with particularly old cpanm;
-    # force at least this version. However, note that, on Windows, a too recent
-    # version will hit https://github.com/miyagawa/cpanminus/issues/169
-    $out{ 'App::cpanminus' } = $WINDOWS ? '1.4008' : '1.5018';
 
     return %out;
 }
@@ -320,21 +311,12 @@ sub install_cpanminus
 
     my ($tempfh, $tempfilename) = tempfile( 'qtqa-cpanminus.XXXXXX', TMPDIR => 1 );
 
-    my $response = LWP::UserAgent->new( )->get( $HTTP_CPANMINUS );
+    my $response = LWP::UserAgent->new( )->get( $HTTPS_CPANMINUS );
 
-    die "get $HTTP_CPANMINUS: ".$response->as_string if (!$response->is_success);
+    die "get $HTTPS_CPANMINUS: ".$response->as_string if (!$response->is_success);
 
     $tempfh->print( $response->decoded_content );
     close( $tempfh ) || die "close $tempfilename: $OS_ERROR";
-
-    my $to_install =
-        # On Windows, due to bug https://github.com/miyagawa/cpanminus/issues/169 ,
-        # we use this older version of cpanminus; all other platforms may use latest
-        # available version
-        $WINDOWS
-            ? 'http://search.cpan.org/CPAN/authors/id/M/MI/MIYAGAWA/App-cpanminus-1.4008.tar.gz'
-            : 'App::cpanminus'
-    ;
 
     my @cmd = (
         'perl',
@@ -344,7 +326,7 @@ sub install_cpanminus
         '--mirror',       # www.cpan.org is having too many problems
         'http://cpan.metacpan.org',
         '--reinstall',    # install in that prefix even if already installed somewhere else
-        $to_install,      # name or URL of the module to install
+        'App::cpanminus', # name or URL of the module to install
     );
 
     print "+ @cmd\n";
@@ -440,39 +422,6 @@ sub run_cpan
     return $out;
 }
 
-# Import the local::lib module into the current process or exit.
-#
-# Importing local::lib ensure the selected prefix exists and is
-# available for use by the current process and all subprocesses.
-#
-# This is equivalent to `use local::lib', except that it will give
-# a helpful failure message if local::lib is not available.
-#
-sub do_local_lib
-{
-    my ($self) = @_;
-
-    my $prefix = $self->{locallib};
-    eval { require local::lib; local::lib->import($prefix) };
-    if (!$EVAL_ERROR) {
-        return;
-    }
-
-    print STDERR
-        "$EVAL_ERROR\n\nI need you to manually install the local::lib module "
-       ."before I can proceed.  This module allows me to easily set up a perl "
-       ."prefix under $prefix.\n";
-
-    # This hint may be helpful to some :)
-    if (-e "/etc/debian_version") {
-        print STDERR
-            "\nOn Debian and Ubuntu, this module is available from the "
-           ."`liblocal-lib-perl' package.\n";
-    }
-
-    exit 1;
-}
-
 # Try hard to ensure all CPAN modules returned from all_required_cpan_modules
 # are installed.  The cpan command may be run several times.
 #
@@ -481,9 +430,6 @@ sub do_local_lib
 sub ensure_complete_cpan
 {
     my $self = shift;
-
-    # We expect everything under a local::lib
-    $self->do_local_lib;
 
     return $self->try_hard_to_install(
         name        =>  "CPAN",
