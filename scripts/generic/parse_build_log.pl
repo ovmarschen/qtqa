@@ -1,38 +1,36 @@
 #!/usr/bin/env perl
 #############################################################################
 ##
-## Copyright (C) 2015 The Qt Company Ltd.
-## Contact: http://www.qt.io/licensing/
+## Copyright (C) 2017 The Qt Company Ltd.
+## Contact: https://www.qt.io/licensing/
 ##
 ## This file is part of the Quality Assurance module of the Qt Toolkit.
 ##
-## $QT_BEGIN_LICENSE:LGPL21$
+## $QT_BEGIN_LICENSE:GPL-EXCEPT$
 ## Commercial License Usage
 ## Licensees holding valid commercial Qt licenses may use this file in
 ## accordance with the commercial license agreement provided with the
 ## Software or, alternatively, in accordance with the terms contained in
 ## a written agreement between you and The Qt Company. For licensing terms
-## and conditions see http://www.qt.io/terms-conditions. For further
-## information use the contact form at http://www.qt.io/contact-us.
+## and conditions see https://www.qt.io/terms-conditions. For further
+## information use the contact form at https://www.qt.io/contact-us.
 ##
-## GNU Lesser General Public License Usage
-## Alternatively, this file may be used under the terms of the GNU Lesser
-## General Public License version 2.1 or version 3 as published by the Free
-## Software Foundation and appearing in the file LICENSE.LGPLv21 and
-## LICENSE.LGPLv3 included in the packaging of this file. Please review the
-## following information to ensure the GNU Lesser General Public License
-## requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-## http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
-##
-## As a special exception, The Qt Company gives you certain additional
-## rights. These rights are described in The Qt Company LGPL Exception
-## version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+## GNU General Public License Usage
+## Alternatively, this file may be used under the terms of the GNU
+## General Public License version 3 as published by the Free Software
+## Foundation with exceptions as appearing in the file LICENSE.GPL3-EXCEPT
+## included in the packaging of this file. Please review the following
+## information to ensure the GNU General Public License requirements will
+## be met: https://www.gnu.org/licenses/gpl-3.0.html.
 ##
 ## $QT_END_LICENSE$
 ##
 #############################################################################
 
 package QtQA::App::ParseBuildLog;
+
+# Note: As of 20.6.2019 (Coin 1.1), this script is no longer in use
+# It should only be used as a reference for COIN-16
 
 use 5.010;
 use strict;
@@ -85,35 +83,6 @@ Print this message.
 If given, as well as printing out the interesting lines from the log, the script
 will attempt to print out a human-readable summary of the error(s).
 
-This option has no effect when --yaml is given.
-
-=item B<--yaml>
-
-Use YAML instead of plain text output.
-
-The output will consist of a single YAML document with zero or more of the
-following key/value pairs:
-
-=over
-
-=item summary
-
-The human-readable summary of the failure reason (if known).
-Usually one or two sentences.
-
-=item detail
-
-The extracted text from the build log relating to the failure.
-
-=item should_retry
-
-A hint that it might make sense to retry the build/test.
-
-If set, this indicates that the failure extracted from the log may be unrelated
-to the code under test; for example, a temporary network outage.
-
-=back
-
 =item B<--limit> LINES
 
 Limit the amount of extracted lines to the given value.
@@ -125,6 +94,12 @@ If omitted, an undefined but reasonable default is used.
 
 Enable some debug messages to STDERR.
 Use this to troubleshoot when some log is not parsed in the expected manner.
+
+=item B<--trim-prefix> REGEX
+
+Remove any matching content from the specified regular expression before
+further analyzing the content. Use this when our log output is filtered
+through an intermediate program that adds a prefix such as a time stamp.
 
 =back
 
@@ -140,35 +115,31 @@ use File::Basename;
 use File::Slurp qw();
 use Getopt::Long qw(GetOptionsFromArray);
 use IO::Uncompress::AnyInflate qw(anyinflate $AnyInflateError);
-use Lingua::EN::Inflect qw(inflect PL WORDLIST);
-use Lingua::EN::Numbers qw(num2en);
 use List::MoreUtils qw(any apply);
 use Pod::Usage;
-use Const::Fast;
 use Text::Wrap;
-use YAML qw();
 
 # Contact details of some CI admins who can deal with problems.
 # Put a public email address here once we have one!
-const my $CI_CONTACT
-    => q{some CI administrator};
+my $CI_CONTACT
+    = q{some CI administrator};
 
 # The max amount of lines we're willing to buffer before giving up,
 # when attempting to identify a related chunk of output (e.g. a single
 # autotest log).
-const my $MAX_CHUNK_LINES => 5000;
+my $MAX_CHUNK_LINES = 5000;
 
 # The max amount of characters permitted in a line;
 # any more than this and we will truncate the line.
 # Longer lines could trigger bad performance in some regexes, and it is
 # not user-friendly to present such long lines to the reader.
-const my $MAX_LINE_LENGTH => 3500;
+my $MAX_LINE_LENGTH = 3500;
 
 # The max amount of lines to search around any interesting line for
 # related text (for example, if a compiler failure message is seen for
 # foo.cpp, look up to $RECENT_MAX lines in the past for other messages
 # relating to .cpp).
-const my $RECENT_MAX => 60;
+my $RECENT_MAX = 60;
 
 # List of all common error strings returned by strerror();
 # This may be generated by:
@@ -182,8 +153,8 @@ const my $RECENT_MAX => 60;
 # Note that these are matched case-insensitive, as certain tools seem to use
 # messages from this list with slight differences in case.
 #
-const my @POSIX_ERROR_STRINGS
-    => split /\n/, <<'END_ERROR_STRINGS';
+my @POSIX_ERROR_STRINGS
+    = split /\n/, <<'END_ERROR_STRINGS';
 .lib section in a.out corrupted
 Accessing a corrupted shared library
 Address already in use
@@ -263,6 +234,7 @@ Link has been severed
 Link number out of range
 Machine is not on the network
 Malformed Mach-o file
+Memory page has hardware error
 Message too long
 Multihop attempted
 Name not unique on network
@@ -296,6 +268,7 @@ Object is remote
 Operation already in progress
 Operation canceled
 Operation not permitted
+Operation not possible due to RF-kill
 Operation not supported
 Operation not supported by device
 Operation not supported on socket
@@ -326,6 +299,7 @@ Resource busy
 Resource deadlock avoided
 Resource temporarily unavailable
 Result too large
+Stale file handle
 STREAM ioctl timeout
 Shared library version mismatch
 Socket is already connected
@@ -360,13 +334,13 @@ END_ERROR_STRINGS
 
 # List of any test script contexts where an error indicates that the build may be
 # able to succeed if we retry.
-const my %TESTSCRIPT_RETRY_CONTEXTS => map { $_ => 1 } (
+my %TESTSCRIPT_RETRY_CONTEXTS = map { $_ => 1 } (
     'determining test script configuration',    # usually error in qtqa/testconfig
     'setting up git repositories',              # usually network outage or similar
 );
 
 # All important regular expressions used to extract errors
-const my %RE => (
+my %RE = (
 
     # never matches anything
     never_match => qr{a\A}ms,
@@ -487,6 +461,15 @@ const my %RE => (
         ' \s \Qexited with code \E\d
     }xms,
 
+    # configure output.
+    #
+    configure_begin => qr{
+        Running configuration tests(?: \(phase [12]\))\.\.\.
+    }xms,
+    configure_end => qr{
+        \QDone running configuration tests.\E
+    }xms,
+
     # make failed.
     #
     # Examples:
@@ -519,7 +502,7 @@ const my %RE => (
                 |
                 [gn]make        # GNU make, nmake
                 |
-                mingw32-make
+                [Mm]ingw32-make
             )
 
             (?: \.exe )?    # maybe has .exe on the end on Windows
@@ -561,16 +544,19 @@ const my %RE => (
 
                     |
 
-                    # This comes when make itself segfaults
-                    \QSegmentation fault: 11\E
+                    # This comes when make itself or a tool segfaults
+                    (?<errortext>
+                        \QSegmentation fault: 11\E
+                        .*?
+                    )
                 )
 
                 |
 
                 (?<errortext>
-                    \QNo rule to make target `\E
-                    [^']+
-                    \Q', needed by `\E
+                    \QNo rule to make target \E.
+                    [^']+?
+                    \Q', needed by \E.
                     (?<target>
                         [^']+
                     )
@@ -638,6 +624,7 @@ const my %RE => (
 
             # foobar.cpp:123: error: quiznux
             (?<file>
+                (?:\w:)?
                 [^:]+
             )
 
@@ -647,11 +634,11 @@ const my %RE => (
                 \d+
             )
 
-            (?:         # It is possible to have more than one line number in the error, e.g:
+            (?:         # gcc sometimes includes column number after line number, e.g:
                 :\d+    #   mapsgl/frustum_p.h:60:27: (...)
-            )*          # We do not capture them at the moment.
+            )*          # We do not capture this at the moment.
 
-            : \s
+            : \s+
 
             (?<error>
                 (?:
@@ -677,7 +664,7 @@ const my %RE => (
             /bin/sh:
             \s+
 
-            line \s \d+:
+            line \s+ \d+:
             \s+
 
             \d+             # pid
@@ -696,7 +683,7 @@ const my %RE => (
             .+?             # rest of command and arguments ...
 
             (?<file>        # ...and assume file is the last argument (qmake-specific assumption)
-                [^\s]+
+                \S+
             )
 
           |
@@ -809,8 +796,8 @@ const my %RE => (
                 \s+
             )
             from
-            \s
-            [^\s]+:\d+  # some/file.cpp:123
+            \s+
+            \S+:\d+     # some/file.cpp:123
             [,:]        # , or : depending on whether it's the last line
             \s*
             \z
@@ -869,13 +856,13 @@ const my %RE => (
         (?:
 
             (?<linker>
-                ld              # basename only
+                (?:[a-z0-9.-]+-)?ld                   # basename only
                 |
-                /[^\s]{1,80}/ld      # full path
+                /\S{1,80}/(?:[a-z0-9.-]+-)?ld         # full path
             )
 
             :
-            \s
+            \s+
 
             (?<error>
                 (?:
@@ -940,14 +927,14 @@ const my %RE => (
             .{1,300}?     # file part (may be .o, .cpp, or both, with also .text reference)
 
             :
-            \s
+            \s+
 
             (?:
-                \Qundefined reference to `\E
+                \Qundefined reference to \E
                 |
-                \Qmore undefined references to `\E
+                \Qmore undefined references to \E
                 |
-                \Qmultiple definition of `\E
+                \Qmultiple definition of \E
             )
 
             .+
@@ -1034,9 +1021,10 @@ const my %RE => (
             \A
             \s*
 
+            (?:\w:)?
             [^:]+\.o:
-            \s
-            \QIn function `\E
+            \s+
+            \QIn function \E
 
             .+
             \z
@@ -1082,7 +1070,7 @@ const my %RE => (
             .+
 
             -o
-            \s
+            \s+
 
             (?<lib>
                 lib [^\.]+ \. # name always starts with libSomething.
@@ -1093,7 +1081,7 @@ const my %RE => (
                     \d        # mac:   libQtCore.5.0.0.dylib
                 )
 
-                [^\s]+
+                \S+
             )
 
           |
@@ -1116,10 +1104,10 @@ const my %RE => (
             # silent mode, linking path/to/libWhatever.so
             linking
 
-            \s
+            \s+
 
             (?<lib>
-                [^\s]+
+                \S+
 
                 (?:
                     \.so
@@ -1127,7 +1115,7 @@ const my %RE => (
                     \.dylib     # must contain at least one .so or .dylib to be a library
                 )
 
-                [^\s]+
+                \S+
             )
 
             \z
@@ -1137,9 +1125,9 @@ const my %RE => (
             # silent mode, linking path/to/Something.framework/Something
             linking
 
-            \s
+            \s+
 
-            [^\s]+?
+            \S+?
             /
             (?<lib>
                 \w+
@@ -1148,7 +1136,7 @@ const my %RE => (
             )
             /
 
-            [^\s]+
+            \S+
 
             \z
         )
@@ -1179,6 +1167,7 @@ const my %RE => (
 
             # path/to/file.pro:123: Parse Error
             (?<file>
+                (?:\w:)?
                 [^:]+?
                 \.pr[iof]
             )
@@ -1196,6 +1185,7 @@ const my %RE => (
                 \QCannot find file: \E
             )
             (?<file>
+                (?:\w:)?
                 [^:]+?
                 \.pr[iof]
             )
@@ -1269,6 +1259,23 @@ const my %RE => (
             ':
             .*
             (?<tool_objcopy>)
+
+          |
+            # QtPlatformHeaders
+
+            ^QtPlatformHeaders:
+            \s+
+            ERROR:
+            \s+
+            (?<file>
+                (?:\w:)?
+                [^:]+?
+            )
+            \s+
+            includes private header
+            \s+
+            .*
+            (?<tool_QtPlatformHeaders>)
 
             # add more as discovered
         )
@@ -1385,10 +1392,10 @@ const my %RE => (
 
             .*?         # all the arguments to testrunner.pl
             [ ]--[ ]    # end of the arguments to testrunner.pl
-            [^\s]+?     # path up to the last directory separator
+            \S+?        # path up to the last directory separator
             [/\\]       # the last directory separator
             (?<name>
-                [^\s]+  # basename of the test
+                \S+     # basename of the test
             )
         )
 
@@ -1401,7 +1408,7 @@ const my %RE => (
             [gn]?make
             \[ \d+ \]
             :
-            \s
+            \s+
             Entering[ ]directory[ ]
 
             `
@@ -1457,36 +1464,6 @@ const my %RE => (
     autotest_flaky => qr{
         \A
         \QQtQA::App::TestRunner: the test seems to be flaky\E
-    }xms,
-
-    # The line where a QtQA::TestScript YAML message opens.
-    #
-    # Captures:
-    #
-    #   type    -   the type of message (currently 'error' or 'failure')
-    #
-    yaml_begin => qr{
-        \A
-        \Q--- !qtqa.qt-project.org/\E
-        (?<type>
-            .{1,50}
-        )
-        \z
-    }xms,
-
-    # The line where a QtQA::TestScript YAML message ends.
-    #
-    # Captures:
-    #
-    #   type    -   the type of message (currently 'error' or 'failure')
-    #
-    yaml_end => qr{
-        \A
-        \Q... \E\#\Q end qtqa.qt-project.org/\E
-        (?<type>
-            .{1,50}
-        )
-        \z
     }xms,
 
     # Generic strerror-based pattern.
@@ -1615,7 +1592,7 @@ sub run
 
     $self->set_options_from_args( @args );
 
-    my @log_lines = $self->read_file( );
+    my @log_lines = $self->read_file( $self->{ trim_prefix } );
 
     # We pass through the log twice.
     # The first pass determines what caused the build to fail (if anything) ...
@@ -1649,12 +1626,9 @@ sub set_options_from_args
         'help'          =>  sub { pod2usage(0) },
         'debug'         =>  \$self->{ debug },
         'summarize'     =>  \$self->{ summarize },
-        'yaml'          =>  \$self->{ yaml },
         'limit=i'       =>  \$self->{ limit_lines },
+        'trim-prefix=s' =>  \$self->{ trim_prefix },
     ) || pod2usage(1);
-
-    # summary is always generated in YAML mode
-    $self->{ summarize } ||= $self->{ yaml };
 
     # Should be exactly one argument left - the filename.
     if (@args > 1) {
@@ -1676,10 +1650,14 @@ sub set_options_from_args
 #  - truncates line if too long
 sub normalize_line
 {
-    my ($self, $line) = @_;
+    my ($self, $line, $trim_prefix) = @_;
 
     # Note: don't use Text::Trim here, it's surprisingly slow.
     $line =~ s/\s+\z//;
+
+    if (length $trim_prefix) {
+        $line =~ s/$trim_prefix//;
+    }
 
     # Truncate lines exceeding $MAX_LINE_LENGTH to $MAX_LINE_LENGTH
     my $length = length($line);
@@ -1740,7 +1718,7 @@ sub read_file_from_url
 
 sub read_file
 {
-    my ($self) = @_;
+    my ($self, $trim_prefix) = @_;
 
     my $file = $self->{ file };
 
@@ -1771,7 +1749,7 @@ sub read_file
     @lines = split( qr{\n}, $uncompressed );
 
     # normalize before returning
-    @lines = map { $self->normalize_line($_) } @lines;
+    @lines = map { $self->normalize_line($_, $trim_prefix) } @lines;
 
     return @lines;
 }
@@ -1950,37 +1928,6 @@ sub testscript_error_should_retry
     return;
 }
 
-# Create a handler for an embedded YAML chunk.
-sub yaml_chunk_handler
-{
-    my ($self, %chunk) = @_;
-
-    $chunk{ begin_re } = $RE{ yaml_begin };
-
-    $chunk{ begin_sub } = sub {
-        my ($chunk_ref, $line, $out) = @_;
-        my $text = "$line\n" . $chunk_ref->{ details };
-        my $loaded = eval { YAML::Load( $text ) };
-        if ($loaded) {
-            # for backwards compatibility: message now named 'message', but used
-            # to be named 'error', support both for a while.
-            if (my $error = delete $loaded->{ error }) {
-                $loaded->{ message } = $error;
-            }
-            push @{$out->{ yaml_fail }}, $loaded;
-
-            # Retry if it makes sense; note that we only retry on errors, not failures
-            if ($chunk{ type } eq 'error' && $self->testscript_error_should_retry( $loaded )) {
-                $out->{ should_retry } = 1;
-            }
-        } else {
-            warn "log seems to contain a corrupt YAML block:\n$text\nFailed to parse: $@";
-        }
-    };
-
-    return $self->chunk_handler( 'yaml', %chunk );
-}
-
 # Create a handler for an embedded qmake chunk.
 # Actually, only looks for a "Project ERROR: " line.
 # Ideally this would not be necessary, but unfortunately the exit code from
@@ -2008,6 +1955,26 @@ sub qmake_chunk_handler
     };
 
     return $self->chunk_handler( 'qmake', %chunk );
+}
+
+# Create a handler for configure test output.
+# The sole purpose of this handler is to skip the configure output from the
+# log, as it pointlessly triggers the compiler and linker error handlers.
+# We don't try to identify actual configuration failures - the output is
+# rather heterogenous and subject to change, so it would unreasonable to try
+# to keep up. However, the log is rather short when configure actually fails,
+# so it's no problem to have to look inside it.
+sub configure_chunk_handler
+{
+    my ($self, %chunk) = @_;
+
+    $chunk{ begin_re } = $RE{ configure_begin };
+
+    $chunk{ begin_sub } = sub { return 1; };
+
+    $chunk{ read_sub } = sub { };
+
+    return $self->chunk_handler( 'configure', %chunk );
 }
 
 # Add a $tool failure identified from $line into $out, a hashref
@@ -2127,11 +2094,6 @@ sub identify_failures
             );
         }
 
-        # opening a YAML error message?
-        elsif ($save_failures && $line =~ $RE{ yaml_end }) {
-            $chunk_handler = $self->yaml_chunk_handler( type => $+{ type } );
-        }
-
         # compiler failed?
         #
         elsif ($save_failures && $line =~ $RE{ compile_fail }) {
@@ -2197,6 +2159,12 @@ sub identify_failures
             add_tool_fail( $out, $tool, $line );
         }
 
+        # ignorable configure output?
+        #
+        elsif ($line =~ $RE{ configure_end }) {
+            $chunk_handler = $self->configure_chunk_handler();
+        }
+
         # Badly understood glitchy behavior?
         elsif ($save_failures && $line =~ $RE{ glitch }) {
             $out->{ should_retry } = 1;
@@ -2236,23 +2204,6 @@ sub extract_autotest_fail
 
     foreach my $autotest (@{ $fail->{ autotest_fail } || []} ) {
         my @lines = split( /\n/, $autotest->{ details } );
-        push @{$lines_ref}, @lines;
-        # each failure gets one trailing blank line to separate it from others
-        push @{$lines_ref}, q{};
-    }
-
-    return;
-}
-
-sub extract_yaml_fail
-{
-    my ($self, %args) = @_;
-
-    my $fail = $args{ fail };
-    my $lines_ref = $args{ lines_ref };
-
-    foreach my $error (@{ $fail->{ yaml_fail } || []} ) {
-        my @lines = split( /\n/, $error->{ message } );
         push @{$lines_ref}, @lines;
         # each failure gets one trailing blank line to separate it from others
         push @{$lines_ref}, q{};
@@ -2302,12 +2253,6 @@ sub extract
     if ($self->{ summarize }) {
         $summary = $self->extract_summary( $fail );
     }
-
-    # YAML failures (explicit failure messages from the test script(s)) come first.
-    $self->extract_yaml_fail(
-        fail => $fail,
-        lines_ref => \@detail,
-    );
 
     # Output any autotest failures next.
     $self->extract_autotest_fail(
@@ -2596,11 +2541,8 @@ sub extract_summary
         my $linked_too_early = $fail->{ linker_attempted_to_link_too_early };
         if ($linked_too_early) {
             my @libs = keys %{ $linked_too_early };
-
-            Lingua::EN::Inflect::NUM( scalar(@libs) );
-
             my $project      = (@libs > 1) ? 'project(s)'   : 'project';
-            my $that_lib_was = inflect 'PL(that) PL(library) PL(was)';
+            my $that_lib_was = scalar(@libs) > 1 ? 'those libraries were' : 'that library was';
             my $lib          = WORDLIST( @libs, { conj => q{and/or} } );
 
             $summary .= "\n\nIt seems that some $project tried to link against $lib "
@@ -2667,19 +2609,6 @@ sub extract_summary
 sub output
 {
     my ($self, $data) = @_;
-
-    if ($self->{ yaml }) {
-        my %yamldata = %{ $data || {} };
-
-        # in the YAML document, output the lines as a single scalar
-        # rather than a list
-        if ($yamldata{ detail }) {
-            $yamldata{ detail } = join( "\n", @{ $yamldata{ detail } || [] } );
-        }
-
-        print YAML::Dump( \%yamldata );
-        return;
-    }
 
     my $summary;
     my $detail_indent = q{};

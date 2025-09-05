@@ -1,38 +1,33 @@
 /****************************************************************************
 **
-** Copyright (C) 2015 The Qt Company Ltd.
-** Contact: http://www.qt.io/licensing/
+** Copyright (C) 2017 The Qt Company Ltd.
+** Contact: https://www.qt.io/licensing/
 **
 ** This file is part of the test suite of the Qt Toolkit.
 **
-** $QT_BEGIN_LICENSE:LGPL21$
+** $QT_BEGIN_LICENSE:GPL-EXCEPT$
 ** Commercial License Usage
 ** Licensees holding valid commercial Qt licenses may use this file in
 ** accordance with the commercial license agreement provided with the
 ** Software or, alternatively, in accordance with the terms contained in
 ** a written agreement between you and The Qt Company. For licensing terms
-** and conditions see http://www.qt.io/terms-conditions. For further
-** information use the contact form at http://www.qt.io/contact-us.
+** and conditions see https://www.qt.io/terms-conditions. For further
+** information use the contact form at https://www.qt.io/contact-us.
 **
-** GNU Lesser General Public License Usage
-** Alternatively, this file may be used under the terms of the GNU Lesser
-** General Public License version 2.1 or version 3 as published by the Free
-** Software Foundation and appearing in the file LICENSE.LGPLv21 and
-** LICENSE.LGPLv3 included in the packaging of this file. Please review the
-** following information to ensure the GNU Lesser General Public License
-** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
-**
-** As a special exception, The Qt Company gives you certain additional
-** rights. These rights are described in The Qt Company LGPL Exception
-** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+** GNU General Public License Usage
+** Alternatively, this file may be used under the terms of the GNU
+** General Public License version 3 as published by the Free Software
+** Foundation with exceptions as appearing in the file LICENSE.GPL3-EXCEPT
+** included in the packaging of this file. Please review the following
+** information to ensure the GNU General Public License requirements will
+** be met: https://www.gnu.org/licenses/gpl-3.0.html.
 **
 ** $QT_END_LICENSE$
 **
 ****************************************************************************/
 
 #include "windowmanager.h"
-#include <QtCore/QTime>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QThread>
 #include <QtCore/QDebug>
 #include <QtCore/QTextStream>
@@ -45,15 +40,9 @@
 #  include <X11/Xmd.h>    // CARD32
 #endif
 
-#if defined(Q_OS_WIN) && !defined(Q_OS_WINCE)
-#  include <windows.h>
+#if defined(Q_OS_WIN)
+#  include <qt_windows.h>
 #endif
-
-// Export the sleep function
-class FriendlySleepyThread : public QThread {
-public:
-    static void sleepMS(int milliSeconds) { msleep(milliSeconds); }
-};
 
 #ifdef Q_WS_X11
 // X11 Window manager
@@ -63,7 +52,7 @@ public:
 // can be checked after calls.
 
 static unsigned x11ErrorCount = 0;
-static const char *currentX11Function = 0;
+static const char *currentX11Function = nullptr;
 
 int xErrorHandler(Display *, XErrorEvent *e)
 {
@@ -142,7 +131,7 @@ static Window waitForTopLevelMapped(Display *display, unsigned count, int timeOu
     xa_wm_state = XInternAtom(display, "WM_STATE", False);
 #endif
 
-    QTime elapsedTime;
+    QElapsedTimer elapsedTime;
     elapsedTime.start();
     while (mappingsCount) {
         if (elapsedTime.elapsed() > timeOutMS) {
@@ -194,10 +183,12 @@ public:
     ~X11_WindowManager();
 
 protected:
-    virtual bool isDisplayOpenImpl() const;
-    virtual bool openDisplayImpl(QString *errorMessage);
-    virtual QString waitForTopLevelWindowImpl(unsigned count, Q_PID, int timeOutMS, QString *errorMessage);
-    virtual bool sendCloseEventImpl(const QString &winId, Q_PID pid, QString *errorMessage);
+    bool isDisplayOpenImpl() const override;
+    bool openDisplayImpl(QString *errorMessage) override;
+    QString waitForTopLevelWindowImpl(unsigned count, qint64, int timeOutMS,
+                                      QString *errorMessage) override;
+    bool sendCloseEventImpl(const QString &winId, qint64 pid,
+                            QString *errorMessage) override;
 
 private:
     Display *m_display;
@@ -241,7 +232,7 @@ bool X11_WindowManager::openDisplayImpl(QString *errorMessage)
     return true;
 }
 
-QString X11_WindowManager::waitForTopLevelWindowImpl(unsigned count, Q_PID, int timeOutMS, QString *errorMessage)
+QString X11_WindowManager::waitForTopLevelWindowImpl(unsigned count, qint64, int timeOutMS, QString *errorMessage)
 {
     const Window w = waitForTopLevelMapped(m_display, count, timeOutMS, errorMessage);
     if (w == 0)
@@ -249,7 +240,7 @@ QString X11_WindowManager::waitForTopLevelWindowImpl(unsigned count, Q_PID, int 
     return QLatin1String("0x") + QString::number(w, 16);
 }
 
- bool X11_WindowManager::sendCloseEventImpl(const QString &winId, Q_PID, QString *errorMessage)
+ bool X11_WindowManager::sendCloseEventImpl(const QString &winId, qint64, QString *errorMessage)
  {
      // Get win id
      bool ok;
@@ -287,19 +278,23 @@ QString X11_WindowManager::waitForTopLevelWindowImpl(unsigned count, Q_PID, int 
 
 #endif
 
-#if defined(Q_OS_WIN) && !defined(Q_OS_WINCE)
+#if defined(Q_OS_WIN)
 // Windows
 
  QString winErrorMessage(unsigned long error)
 {
     QString rc = QString::fromLatin1("#%1: ").arg(error);
-    ushort *lpMsgBuf;
+    char16_t *lpMsgBuf;
 
     const int len = FormatMessage(
             FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-            NULL, error, 0, (LPTSTR)&lpMsgBuf, 0, NULL);
+            NULL, error, 0, reinterpret_cast<LPTSTR>(&lpMsgBuf), 0, nullptr);
     if (len) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
         rc = QString::fromUtf16(lpMsgBuf, len);
+#else
+        rc = QString::fromUtf16(reinterpret_cast<const ushort *>(lpMsgBuf), len);
+#endif
         LocalFree(lpMsgBuf);
     } else {
         rc += QString::fromLatin1("<unknown error>");
@@ -313,10 +308,12 @@ QString X11_WindowManager::waitForTopLevelWindowImpl(unsigned count, Q_PID, int 
      Win_WindowManager() {}
 
  protected:
-     virtual bool isDisplayOpenImpl() const;
-     virtual bool openDisplayImpl(QString *errorMessage);
-     virtual QString waitForTopLevelWindowImpl(unsigned count, Q_PID, int timeOutMS, QString *errorMessage);
-     virtual bool sendCloseEventImpl(const QString &winId, Q_PID pid, QString *errorMessage);
+     bool isDisplayOpenImpl() const override;
+     bool openDisplayImpl(QString *errorMessage) override;
+     QString waitForTopLevelWindowImpl(unsigned count, qint64, int timeOutMS,
+                                      QString *errorMessage) override;
+     virtual bool sendCloseEventImpl(const QString &winId, qint64 pid,
+                                     QString *errorMessage) override;
 
  private:
  };
@@ -344,7 +341,7 @@ struct FindProcessWindowEnumContext {
 static inline bool isQtMainWindow(HWND hwnd)
 {
     static char buffer[MAX_PATH];
-    if (!GetClassNameA(hwnd, buffer, MAX_PATH) || qstrcmp(buffer, "QWidget"))
+    if (!GetClassNameA(hwnd, buffer, MAX_PATH) || qstrncmp(buffer, "Qt", 2))
         return false;
     WINDOWINFO windowInfo;
     if (!GetWindowInfo(hwnd, &windowInfo))
@@ -352,8 +349,8 @@ static inline bool isQtMainWindow(HWND hwnd)
     if (!(windowInfo.dwWindowStatus & WS_ACTIVECAPTION))
         return false;
     // Check the style for a real mainwindow
-    const DWORD excluded = WS_DISABLED | WS_POPUP;
-    const DWORD required = WS_CAPTION | WS_SYSMENU | WS_VISIBLE;    
+    const DWORD excluded = WS_DISABLED;
+    const DWORD required = WS_CAPTION | WS_SYSMENU | WS_VISIBLE;
     return (windowInfo.dwStyle & excluded) == 0
             && (windowInfo.dwStyle & required) == required;
 }
@@ -370,33 +367,58 @@ static BOOL CALLBACK findProcessWindowEnumWindowProc(HWND hwnd, LPARAM lParam)
     return TRUE;
 }
 
-QString Win_WindowManager::waitForTopLevelWindowImpl(unsigned /* count */, Q_PID pid, int timeOutMS, QString *errorMessage)
-{    
-    QTime elapsed;
+class ScopedHandle
+{
+public:
+    explicit ScopedHandle(HANDLE h) : m_handle(h) {}
+    ~ScopedHandle() { CloseHandle(m_handle); }
+    operator HANDLE() const { return m_handle; }
+
+    ScopedHandle(const ScopedHandle &) = delete;
+    ScopedHandle &operator=(const ScopedHandle &) = delete;
+
+private:
+    const HANDLE m_handle;
+};
+
+QString Win_WindowManager::waitForTopLevelWindowImpl(unsigned /* count */, qint64 pid, int timeOutMS, QString *errorMessage)
+{
+    const auto processId = DWORD(pid);
+    const ScopedHandle hProcess(OpenProcess(PROCESS_QUERY_INFORMATION, FALSE,
+                                            processId));
+     if (hProcess == nullptr) {
+         const int errorCode = GetLastError();
+         qErrnoWarning(errorCode, "OpenProcess() failed (error %d).", errorCode);
+         *errorMessage = QString::fromLatin1("OpenProcess()");
+         return QString();
+     }
+
+    QElapsedTimer elapsed;
     elapsed.start();
     // First, wait until the application is up
-    if (WaitForInputIdle(pid->hProcess, timeOutMS) != 0) {
+    if (WaitForInputIdle(hProcess, timeOutMS) != 0) {
         *errorMessage = QString::fromLatin1("WaitForInputIdle time out after %1ms").arg(timeOutMS);
         return QString();
     }
     // Try to locate top level app window. App still might be in splash screen or initialization
     // phase.
-    const int remainingMilliSeconds = qMax(timeOutMS - elapsed.elapsed(), 500);
+    const int remainingMilliSeconds = qMax(timeOutMS - elapsed.elapsed(), qint64(500));
     const int attempts = 10;
     const int intervalMilliSeconds = remainingMilliSeconds / attempts;
     for (int a = 0; a < attempts; a++) {
-        FindProcessWindowEnumContext context(pid->dwProcessId);
+        FindProcessWindowEnumContext context(processId);
         EnumWindows(findProcessWindowEnumWindowProc, reinterpret_cast<LPARAM>(&context));
         if (context.window)
             return QLatin1String("0x") + QString::number(reinterpret_cast<quintptr>(context.window), 16);
-        sleepMS(intervalMilliSeconds);
+        QThread::msleep(intervalMilliSeconds);
     }
-    *errorMessage = QString::fromLatin1("Unable to find toplevel of process %1 after %2ms.").arg(pid->dwProcessId).arg(timeOutMS);
+    *errorMessage = QString::fromLatin1("Unable to find toplevel of process %1 after %2ms.")
+                    .arg(pid).arg(timeOutMS);
     return QString();
 }
 
-bool Win_WindowManager::sendCloseEventImpl(const QString &winId, Q_PID, QString *errorMessage)
-{   
+bool Win_WindowManager::sendCloseEventImpl(const QString &winId, qint64, QString *errorMessage)
+{
     // Convert window back.
     quintptr winIdIntPtr;
     QTextStream str(const_cast<QString*>(&winId), QIODevice::ReadOnly);
@@ -452,7 +474,7 @@ bool WindowManager::isDisplayOpen() const
 
 
 
-QString WindowManager::waitForTopLevelWindow(unsigned count, Q_PID pid, int timeOutMS, QString *errorMessage)
+QString WindowManager::waitForTopLevelWindow(unsigned count, qint64 pid, int timeOutMS, QString *errorMessage)
 {
     if (!isDisplayOpen()) {
         *errorMessage = msgNoDisplayOpen();
@@ -461,7 +483,7 @@ QString WindowManager::waitForTopLevelWindow(unsigned count, Q_PID pid, int time
     return waitForTopLevelWindowImpl(count, pid, timeOutMS, errorMessage);
 }
 
-bool WindowManager::sendCloseEvent(const QString &winId, Q_PID pid, QString *errorMessage)
+bool WindowManager::sendCloseEvent(const QString &winId, qint64 pid, QString *errorMessage)
 {
     if (!isDisplayOpen()) {
         *errorMessage = msgNoDisplayOpen();
@@ -482,19 +504,14 @@ bool WindowManager::isDisplayOpenImpl() const
     return false;
 }
 
-QString WindowManager::waitForTopLevelWindowImpl(unsigned, Q_PID, int, QString *errorMessage)
+QString WindowManager::waitForTopLevelWindowImpl(unsigned, qint64, int, QString *errorMessage)
 {
     *errorMessage = QLatin1String("Not implemented.");
     return QString();
 }
 
-bool WindowManager::sendCloseEventImpl(const QString &, Q_PID, QString *errorMessage)
+bool WindowManager::sendCloseEventImpl(const QString &, qint64, QString *errorMessage)
 {
     *errorMessage = QLatin1String("Not implemented.");
     return false;
-}
-
-void WindowManager::sleepMS(int milliSeconds)
-{
-    FriendlySleepyThread::sleepMS(milliSeconds);
 }

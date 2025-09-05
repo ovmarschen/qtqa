@@ -1,32 +1,27 @@
 #!/usr/bin/env perl
 #############################################################################
 ##
-## Copyright (C) 2015 The Qt Company Ltd.
-## Contact: http://www.qt.io/licensing/
+## Copyright (C) 2017 The Qt Company Ltd.
+## Contact: https://www.qt.io/licensing/
 ##
 ## This file is part of the Quality Assurance module of the Qt Toolkit.
 ##
-## $QT_BEGIN_LICENSE:LGPL21$
+## $QT_BEGIN_LICENSE:GPL-EXCEPT$
 ## Commercial License Usage
 ## Licensees holding valid commercial Qt licenses may use this file in
 ## accordance with the commercial license agreement provided with the
 ## Software or, alternatively, in accordance with the terms contained in
 ## a written agreement between you and The Qt Company. For licensing terms
-## and conditions see http://www.qt.io/terms-conditions. For further
-## information use the contact form at http://www.qt.io/contact-us.
+## and conditions see https://www.qt.io/terms-conditions. For further
+## information use the contact form at https://www.qt.io/contact-us.
 ##
-## GNU Lesser General Public License Usage
-## Alternatively, this file may be used under the terms of the GNU Lesser
-## General Public License version 2.1 or version 3 as published by the Free
-## Software Foundation and appearing in the file LICENSE.LGPLv21 and
-## LICENSE.LGPLv3 included in the packaging of this file. Please review the
-## following information to ensure the GNU Lesser General Public License
-## requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-## http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
-##
-## As a special exception, The Qt Company gives you certain additional
-## rights. These rights are described in The Qt Company LGPL Exception
-## version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+## GNU General Public License Usage
+## Alternatively, this file may be used under the terms of the GNU
+## General Public License version 3 as published by the Free Software
+## Foundation with exceptions as appearing in the file LICENSE.GPL3-EXCEPT
+## included in the packaging of this file. Please review the following
+## information to ensure the GNU General Public License requirements will
+## be met: https://www.gnu.org/licenses/gpl-3.0.html.
 ##
 ## $QT_END_LICENSE$
 ##
@@ -161,6 +156,12 @@ The default is derived from the first portion of the job name;
 for example, a job name of "QtBase_master_Integration" results
 in "qt/qtbase".
 
+=item custom_repository
+
+Custom repository if needed.
+
+Defaults to empty.
+
 =item testconfig_project
 
 Project name used for the qtqa/testconfig repository
@@ -271,6 +272,42 @@ Qt version number, used in packaging.
 
 Qt license type (commercial/opensource), used in packaging.
 
+=item build_type
+
+Used for assigning build jobs to dedicated label.
+
+=item notarize
+
+Enable (yes) or disable (no) notarization.
+
+=item prod_addr
+
+Production server address
+
+=item prod_srv_repo_base_path
+
+Production server repository base path
+
+=item prod_srv_repo_pending_area_dir
+
+Production server directory for updated repository content
+
+=item repo_staging_server_test_repo_dist_work
+
+Production server temporary directory for online repository update process
+
+=item cores
+
+Number of cores in virtual machine
+
+=item repositories
+
+repository sources to be copied into virtual machine
+
+=item label_with_branch
+
+Information if branch is added into label
+
 =item artifacts_download_url
 
 The url where to download the build artifacts, typically via http.
@@ -303,6 +340,10 @@ Contains the information about the build flow e.g. 5.4.1
 =item qt5sha1
 
 Contains sha1 for qt5
+
+=item use_create_nodes_and_vms
+
+Set to '1' if vm-cloner is to be used instead of default cloner
 
 =item url_trigger
 
@@ -340,9 +381,17 @@ Contains information whether we want to update staging repository
 
 Contains information whether we want to update prodcution repository
 
+=item force_version_number_increase
+
+Contains information whether we want to force version number increase for an online repository build
+
 =item create_maintenance_tool_resource_file
 
 Contains information wheater maintenance tool resource file is created or not
+
+=item execute_postbuild_action
+
+If set then execute post build action for the build
 
 =item module_doc_build_qt_dependency_package_uri
 
@@ -372,6 +421,50 @@ Authorization token to be used when triggering the build from other scripts
 =item job_description
 
 Description for the job.
+
+=item test_script
+
+Test script that is run in shell/batch without Squish
+
+=item cores
+
+Number of cores to be requested for a job, defaults to 2.
+
+=item installer_type
+
+Type of Qt installer to use in RTA test. Online/Offline/Monolite/Pyside.
+
+=item irc_channel
+
+IRC channel to notify
+
+=item pip_path
+
+Path to Qt for Python wheels.
+
+=item python_version
+
+Python version to be used. Version 2 used as default.
+
+=item ts_product
+
+Product name when logging test data to Squish Team Server.
+
+=item ts_labels
+
+Labels for the job data sent to Squish Team Server.
+
+=item ts_batch
+
+Batch info string for the data sent to Squish Team Server.
+
+=item ts_enabled
+
+Whether to enable sending logs to Squish Team Server.
+
+=item qt_creator
+
+QtCreator version preview/released.
 
 =back
 
@@ -684,7 +777,9 @@ sub desired_job_xml
             release_description_file => eval { $self->cfg( "job.$name", 'release_description_file' ) } || q{},
             do_update_staging_repository => eval { $self->cfg( "job.$name", 'do_update_staging_repository' ) } || q{},
             do_update_production_repository => eval { $self->cfg( "job.$name", 'do_update_production_repository' ) } || q{},
+            force_version_number_increase => eval { $self->cfg( "job.$name", 'force_version_number_increase' ) } || q{},
             create_maintenance_tool_resource_file => eval { $self->cfg( "job.$name", 'create_maintenance_tool_resource_file' ) } || q{},
+            execute_postbuild_action => eval { $self->cfg( "job.$name", 'execute_postbuild_action' ) } || q{},
             module_doc_build_qt_dependency_package_uri => eval { $self->cfg( "job.$name", 'module_doc_build_qt_dependency_package_uri' ) } || q{},
             build_combination => eval { $self->cfg( "job.$name", 'build_combination' ) } || q{},
             gerrit_project => $gerrit_project,
@@ -699,6 +794,7 @@ sub desired_job_xml
             pretend => eval { $self->cfg( "job.$name", 'pretend' ) } // 0,
             poll_cron => eval { $self->cfg( "job.$name", 'poll_cron' ) } || q{},
             on_demand => eval { $self->cfg( "job.$name", 'on_demand' ) } // 0,
+            use_create_nodes_and_vms => eval { $self->cfg( "job.$name", 'use_create_nodes_and_vms' ) } // 0,
             template_ini_prefix => eval { $self->cfg( "job.$name", 'template_ini_prefix' ) } // $branch,
             trigger_cron => eval { $self->cfg( "job.$name", 'trigger_cron' ) } || q{},
             publish_xunit => eval { $self->cfg( "job.$name", 'publish_xunit' ) } || q{0},
@@ -709,6 +805,15 @@ sub desired_job_xml
             configurations => \@configurations,
             qt_version => eval { $self->cfg( "job.$name", 'qt_version' ) } || q{},
             qt_license => eval { $self->cfg( "job.$name", 'qt_license' ) } || q{},
+            build_type => eval { $self->cfg( "job.$name", 'build_type' ) } || q{},
+            notarize => eval { $self->cfg( "job.$name", 'notarize' ) } || q{},
+            prod_addr => eval { $self->cfg( "job.$name", 'prod_addr' ) } || q{},
+            prod_srv_repo_base_path => eval { $self->cfg( "job.$name", 'prod_srv_repo_base_path' ) } || q{},
+            prod_srv_repo_pending_area_dir => eval { $self->cfg( "job.$name", 'prod_srv_repo_pending_area_dir' ) } || q{},
+            repo_staging_server_test_repo_dist_work => eval { $self->cfg( "job.$name", 'repo_staging_server_test_repo_dist_work' ) } || q{},
+            cores => eval { $self->cfg( "job.$name", 'cores' ) } || q{},
+            repositories => eval { $self->cfg( "job.$name", 'repositories' ) } || q{},
+            label_with_branch => eval { $self->cfg( "job.$name", 'label_with_branch' ) } || q{},
             artifacts_download_url => eval { $self->cfg( "job.$name", 'artifacts_download_url' ) } || q{},
             artifacts_upload_host => eval { $self->cfg( "job.$name", 'artifacts_upload_host' ) } || q{},
             artifacts_upload_path => eval { $self->cfg( "job.$name", 'artifacts_upload_path' ) } || q{},
@@ -720,6 +825,18 @@ sub desired_job_xml
             auth_token => eval { $self->cfg( "job.$name", 'auth_token' ) } || q{},
             job_description => eval { $self->cfg( "job.$name", 'job_description' ) } || q{},
             suffix_labels => eval { $self->cfg( "job.$name", 'suffix_labels' ) } || q{0},
+            test_script => eval { $self->cfg( "job.$name", 'test_script' ) } || q{},
+            custom_repository => eval { $self->cfg( "job.$name", 'custom_repository' ) } // 0,
+            cores => eval { $self->cfg( "job.$name", 'cores' ) } || q{2},
+            irc_channel => eval { $self->cfg( "job.$name", 'irc_channel' ) } || q{},
+            installer_type => eval { $self->cfg( "job.$name", 'installer_type' ) } || q{},
+            pip_path => eval { $self->cfg( "job.$name", 'pip_path' ) } || q{},
+            python_version => eval { $self->cfg( "job.$name", 'python_version' ) } || q{2},
+            ts_product => eval { $self->cfg( "job.$name", 'ts_product' ) } || q{},
+            ts_labels => eval { $self->cfg( "job.$name", 'ts_labels' ) } || q{},
+            ts_batch => eval { $self->cfg( "job.$name", 'ts_batch' ) } || q{},
+            ts_enabled => eval { $self->cfg( "job.$name", 'ts_enabled' ) } || q{},
+            qt_creator => eval { $self->cfg( "job.$name", 'qt_creator' ) } || q{},
         },
         \$data
     ) || die "job $name: while parsing template: ".$tt->error();

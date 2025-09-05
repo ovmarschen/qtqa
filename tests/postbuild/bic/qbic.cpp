@@ -1,31 +1,26 @@
 /****************************************************************************
 **
-** Copyright (C) 2015 The Qt Company Ltd.
-** Contact: http://www.qt.io/licensing/
+** Copyright (C) 2017 The Qt Company Ltd.
+** Contact: https://www.qt.io/licensing/
 **
 ** This file is part of the test suite of the Qt Toolkit.
 **
-** $QT_BEGIN_LICENSE:LGPL21$
+** $QT_BEGIN_LICENSE:GPL-EXCEPT$
 ** Commercial License Usage
 ** Licensees holding valid commercial Qt licenses may use this file in
 ** accordance with the commercial license agreement provided with the
 ** Software or, alternatively, in accordance with the terms contained in
 ** a written agreement between you and The Qt Company. For licensing terms
-** and conditions see http://www.qt.io/terms-conditions. For further
-** information use the contact form at http://www.qt.io/contact-us.
+** and conditions see https://www.qt.io/terms-conditions. For further
+** information use the contact form at https://www.qt.io/contact-us.
 **
-** GNU Lesser General Public License Usage
-** Alternatively, this file may be used under the terms of the GNU Lesser
-** General Public License version 2.1 or version 3 as published by the Free
-** Software Foundation and appearing in the file LICENSE.LGPLv21 and
-** LICENSE.LGPLv3 included in the packaging of this file. Please review the
-** following information to ensure the GNU Lesser General Public License
-** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
-**
-** As a special exception, The Qt Company gives you certain additional
-** rights. These rights are described in The Qt Company LGPL Exception
-** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+** GNU General Public License Usage
+** Alternatively, this file may be used under the terms of the GNU
+** General Public License version 3 as published by the Free Software
+** Foundation with exceptions as appearing in the file LICENSE.GPL3-EXCEPT
+** included in the packaging of this file. Please review the following
+** information to ensure the GNU General Public License requirements will
+** be met: https://www.gnu.org/licenses/gpl-3.0.html.
 **
 ** $QT_END_LICENSE$
 **
@@ -39,12 +34,17 @@
 
 void QBic::addBlacklistedClass(const QString &wildcard)
 {
-    blackList.append(QRegExp(wildcard, Qt::CaseSensitive, QRegExp::Wildcard));
+    blackList.append(QRegularExpression(QRegularExpression::anchoredPattern(QRegularExpression::wildcardToRegularExpression(wildcard))));
+}
+
+void QBic::addBlacklistedClass(const QRegularExpression &expression)
+{
+    blackList.append(expression);
 }
 
 void QBic::removeBlacklistedClass(const QString &wildcard)
 {
-    blackList.removeAll(QRegExp(wildcard, Qt::CaseSensitive, QRegExp::Wildcard));
+    blackList.removeAll(QRegularExpression(QRegularExpression::anchoredPattern(QRegularExpression::wildcardToRegularExpression(wildcard))));
 }
 
 bool QBic::isBlacklisted(const QString &className) const
@@ -54,7 +54,7 @@ bool QBic::isBlacklisted(const QString &className) const
         return true;
 
     for (int i = 0; i < blackList.count(); ++i)
-        if (blackList[i].exactMatch(className))
+        if (blackList[i].match(className).hasMatch())
             return true;
     return false;
 }
@@ -206,12 +206,13 @@ QBic::Info QBic::parseOutput(const QByteArray &ba) const
             const QString className = entry.at(0).mid(6);
             if (isBlacklisted(className))
                 continue;
-            QRegExp rx("size=(\\d+)");
-            if  (rx.indexIn(entry.at(1)) == -1) {
+            QRegularExpression rx("size=(\\d+)");
+            QRegularExpressionMatch match = rx.match(entry.at(1));
+            if (!match.hasMatch()) {
                 qWarning("Could not parse class information for className %s", className.toLatin1().constData());
                 continue;
             }
-            info.classSizes[className] = rx.cap(1).toInt();
+            info.classSizes[className] = match.captured(1).toInt();
         } else if (entry.at(0).startsWith("Vtable for ")) {
             const QString className = entry.at(0).mid(11);
             if (isBlacklisted(className))
